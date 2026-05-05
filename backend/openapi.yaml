@@ -1,0 +1,403 @@
+openapi: 3.0.3
+info:
+  title: Ticketing System API
+  description: API for managing venues, events, ticket inventory, and orders with optimistic concurrency control.
+  version: 1.0.0
+servers:
+  - url: https://api.ticketing.local/v1
+    description: Main Production API Gateway
+
+security:
+  - BearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      summary: Authenticate user and return JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Missing or malformed request body
+        '401':
+          description: Invalid username or password
+
+  /events:
+    get:
+      summary: List all published events
+      parameters:
+        - in: query
+          name: venue_id
+          schema:
+            type: string
+            format: uuid
+          description: Filter by venue
+      responses:
+        '200':
+          description: A list of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+        '400':
+          description: Invalid query parameters
+        '401':
+          description: Missing or invalid JWT
+    post:
+      summary: Create a new event
+      description: organizer_id is derived from the authenticated user's JWT.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventCreate'
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '400':
+          description: Missing or malformed request body
+        '401':
+          description: Missing or invalid JWT
+        '403':
+          description: Caller not permitted to create events
+        '422':
+          description: Validation error (e.g. end_time before start_time)
+
+  /events/{eventId}/tiers:
+    get:
+      summary: Get ticket pricing tiers for an event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: A list of ticket tiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TicketTier'
+        '401':
+          description: Missing or invalid JWT
+        '404':
+          description: Event not found
+
+  /tickets/{ticketId}:
+    get:
+      summary: Get a ticket by ID
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Ticket details including current lock status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401':
+          description: Missing or invalid JWT
+        '404':
+          description: Ticket not found
+
+  /tickets/{ticketId}/lock:
+    post:
+      summary: Temporarily lock a specific ticket for checkout
+      description: Applies a 10-minute lock using Optimistic Concurrency Control (OCC). Caller identity derived from JWT.
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - expected_version
+              properties:
+                expected_version:
+                  type: integer
+                  description: Current version of the ticket for OCC. Obtain from GET /tickets/{ticketId}.
+      responses:
+        '200':
+          description: Ticket successfully locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401':
+          description: Missing or invalid JWT
+        '404':
+          description: Ticket not found
+        '409':
+          description: Conflict - ticket already locked or version mismatch
+    delete:
+      summary: Release a lock on a ticket before it expires
+      description: Only the user who holds the lock (from JWT) may release it.
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Lock released; ticket returned to AVAILABLE
+        '401':
+          description: Missing or invalid JWT
+        '403':
+          description: Caller does not own this lock
+        '404':
+          description: Ticket not found or not currently locked
+
+  /orders:
+    post:
+      summary: Finalize an order and purchase locked tickets
+      description: user_id is derived from the authenticated user's JWT.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+      responses:
+        '201':
+          description: Order successfully created and tickets marked as SOLD
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Missing or malformed request body
+        '401':
+          description: Missing or invalid JWT
+        '402':
+          description: Payment failed or was declined
+        '404':
+          description: One or more ticket_ids not found
+        '422':
+          description: Validation error (e.g. tickets not locked by caller, lock expired)
+
+  /orders/{orderId}:
+    get:
+      summary: Get an order by ID
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '401':
+          description: Missing or invalid JWT
+        '403':
+          description: Caller does not own this order
+        '404':
+          description: Order not found
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: "Signed JWT; pass as Authorization: Bearer <token> on subsequent requests"
+        expires_at:
+          type: string
+          format: date-time
+
+    Venue:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        address:
+          type: string
+        capacity:
+          type: integer
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        venue_id:
+          type: string
+          format: uuid
+        organizer_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [DRAFT, PUBLISHED, CANCELLED, COMPLETED]
+
+    EventCreate:
+      type: object
+      required:
+        - venue_id
+        - title
+        - start_time
+        - end_time
+      properties:
+        venue_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+
+    TicketTier:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: integer
+          description: Price in cents (e.g. 5000 = $50.00)
+        quantity:
+          type: integer
+        available_count:
+          type: integer
+          description: Remaining tickets not yet LOCKED or SOLD
+
+    Ticket:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tier_id:
+          type: string
+          format: uuid
+        seat_label:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [AVAILABLE, LOCKED, SOLD]
+        order_id:
+          type: string
+          format: uuid
+          nullable: true
+        lock_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        version:
+          type: integer
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        total_amount:
+          type: integer
+          description: Total charged in cents (e.g. 10000 = $100.00)
+        status:
+          type: string
+          enum: [PENDING, PAID, FAILED, REFUNDED]
+        created_at:
+          type: string
+          format: date-time
+
+    OrderCreate:
+      type: object
+      required:
+        - payment_token
+        - ticket_ids
+      properties:
+        payment_token:
+          type: string
+          description: Token from payment gateway (e.g., Stripe)
+        ticket_ids:
+          type: array
+          items:
+            type: string
+            format: uuid

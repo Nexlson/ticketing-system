@@ -1,0 +1,116 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("user")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  events  Event[]
+  orders  Order[]
+
+  @@map("users")
+}
+
+model Venue {
+  id            String  @id @default(uuid())
+  name          String
+  address       String
+  city          String?
+  capacity      Int
+  events Event[]
+
+  @@map("venues")
+}
+
+model Event {
+  id          String      @id @default(uuid())
+  venueId     String      @map("venue_id")
+  organizerId String      @map("organizer_id")
+  title       String
+  startTime   DateTime    @map("start_time")
+  endTime     DateTime    @map("end_time")
+  status      EventStatus @default(DRAFT)
+  category    String?
+  description String?     @db.Text
+  coverColor1 String?     @map("cover_color_1")
+  coverColor2 String?     @map("cover_color_2")
+
+  venue     Venue        @relation(fields: [venueId], references: [id])
+  organizer User         @relation(fields: [organizerId], references: [id])
+  tiers     TicketTier[]
+
+  @@map("events")
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+model TicketTier {
+  id       String  @id @default(uuid())
+  eventId  String  @map("event_id")
+  name     String
+  price    Int
+  quantity Int
+  color    String?
+  tierKey  String? @map("tier_key")
+
+  event   Event    @relation(fields: [eventId], references: [id])
+  tickets Ticket[]
+
+  @@map("ticket_tiers")
+}
+
+model Ticket {
+  id        String       @id @default(uuid())
+  tierId    String       @map("tier_id")
+  seatLabel String?      @map("seat_label")
+  status    TicketStatus @default(AVAILABLE)
+  orderId   String?      @map("order_id")
+  version   Int          @default(0)
+
+  tier  TicketTier @relation(fields: [tierId], references: [id])
+  order Order?     @relation(fields: [orderId], references: [id])
+
+  @@map("tickets")
+}
+
+enum TicketStatus {
+  AVAILABLE
+  LOCKED
+  SOLD
+}
+
+model Order {
+  id                 String      @id @default(uuid())
+  userId             String      @map("user_id")
+  totalAmount        Int         @map("total_amount")
+  status             OrderStatus @default(PENDING)
+  paymentReferenceId String?     @map("payment_reference_id")
+  createdAt          DateTime    @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id])
+  tickets Ticket[]
+
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}

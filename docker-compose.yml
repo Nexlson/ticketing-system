@@ -42,7 +42,7 @@ services:
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
       PORT: 3000
       REDIS_URL: redis://redis:6379
-      FRONTEND_URL: http://localhost:${FRONTEND_PORT}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
     depends_on:
       mysql:
         condition: service_healthy
